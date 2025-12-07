@@ -1,0 +1,267 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Better Auth Models
+// ============================================
+
+// Better Auth - User model
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Better Auth - Additional fields for admin plugin
+  role          UserRole  @default(USER)
+  banned        Boolean   @default(false)
+  banReason     String?
+  banExpires    DateTime?
+  
+  // Application-specific fields
+  telegramId    String    @unique
+  username      String?
+  language      String    @default("en")
+  plan          UserPlan  @default(FREE)
+  isActive      Boolean   @default(true)
+  lastActiveAt  DateTime  @default(now())
+  
+  // Relations
+  sessions        Session[]
+  accounts        Account[]
+  alerts          Alert[]
+  submissions     PriceSubmission[]
+  votes           PriceVote[]
+  merchantProfile Merchant?
+  
+  @@index([telegramId])
+  @@index([email])
+  @@index([role])
+  @@index([plan])
+}
+
+enum UserRole {
+  USER
+  MERCHANT
+  ADMIN
+}
+
+enum UserPlan {
+  FREE
+  PRO
+  MERCHANT_PRO
+}
+
+// Better Auth - Session model
+model Session {
+  id            String   @id @default(cuid())
+  expiresAt     DateTime
+  token         String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  ipAddress     String?
+  userAgent     String?
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Better Auth - Admin plugin field
+  impersonatedBy String?
+  
+  @@index([userId])
+  @@index([token])
+}
+
+// Better Auth - Account model (for OAuth providers)
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([userId])
+  @@unique([providerId, accountId])
+}
+
+// Better Auth - Verification model (for email verification, password reset, etc.)
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  @@index([identifier])
+}
+
+// ============================================
+// Application Models
+// ============================================
+
+// Merchant profile
+model Merchant {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id])
+  name                String
+  reputationScore     Float    @default(0)
+  totalSubmissions    Int      @default(0)
+  accurateSubmissions Int      @default(0)
+  isTrusted           Boolean  @default(false)
+  isFlagged           Boolean  @default(false)
+  isVerified          Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  
+  submissions         PriceSubmission[]
+  
+  @@index([isTrusted])
+  @@index([isFlagged])
+}
+
+// Price submission
+model PriceSubmission {
+  id              String   @id @default(cuid())
+  asset           String
+  value           Float
+  source          String   // 'merchant', 'api', 'user'
+  sourceId        String?  // merchant ID or API name
+  merchant        Merchant? @relation(fields: [sourceId], references: [id])
+  submittedBy     User?    @relation(fields: [submittedById], references: [id])
+  submittedById   String?
+  timestamp       DateTime @default(now())
+  isValid         Boolean  @default(true)
+  isSuspicious    Boolean  @default(false)
+  deviationPercent Float?
+  upvotes         Int      @default(0)
+  downvotes       Int      @default(0)
+  
+  votes           PriceVote[]
+  
+  @@index([asset])
+  @@index([timestamp])
+  @@index([isValid])
+  @@index([isSuspicious])
+}
+
+// Price vote
+model PriceVote {
+  id           String          @id @default(cuid())
+  submissionId String
+  submission   PriceSubmission @relation(fields: [submissionId], references: [id])
+  userId       String
+  user         User            @relation(fields: [userId], references: [id])
+  isUpvote     Boolean
+  timestamp    DateTime        @default(now())
+  
+  @@unique([submissionId, userId])
+  @@index([submissionId])
+}
+
+// Aggregated price
+model AggregatedPrice {
+  id                    String   @id @default(cuid())
+  asset                 String   @unique
+  price                 Float
+  trend                 String   // 'up', 'down', 'stable'
+  high24h               Float
+  low24h                Float
+  spread                Float
+  merchantCount         Int
+  trustedMerchantCount  Int
+  confidence            String   // 'high', 'medium', 'low'
+  lastUpdate            DateTime @default(now())
+  
+  @@index([asset])
+}
+
+// Alert
+model Alert {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  asset       String
+  type        AlertType
+  parameters  Json
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  lastTriggered DateTime?
+  
+  @@index([userId])
+  @@index([asset])
+  @@index([isActive])
+}
+
+enum AlertType {
+  THRESHOLD
+  MOVEMENT
+  ZONE
+  TREND
+}
+
+// Alert trigger log
+model AlertTrigger {
+  id          String   @id @default(cuid())
+  alertId     String
+  userId      String
+  asset       String
+  triggerData Json
+  timestamp   DateTime @default(now())
+  
+  @@index([alertId])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+// System log
+model SystemLog {
+  id        String   @id @default(cuid())
+  level     LogLevel
+  message   String
+  context   Json?
+  timestamp DateTime @default(now())
+  
+  @@index([level])
+  @@index([timestamp])
+}
+
+enum LogLevel {
+  INFO
+  WARNING
+  ERROR
+}
+
+// Admin action log
+model AdminAction {
+  id          String   @id @default(cuid())
+  adminId     String
+  action      String
+  targetType  String   // 'user', 'merchant', 'submission'
+  targetId    String
+  details     Json?
+  timestamp   DateTime @default(now())
+  
+  @@index([adminId])
+  @@index([timestamp])
+}
